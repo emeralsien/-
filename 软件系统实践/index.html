@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>在线预约系统 - C++ 核心版本</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f3f4f6; margin: 0; padding: 20px; color: #333; }
+        .container { display: flex; gap: 20px; max-width: 1300px; margin: 20px auto 0; }
+        .panel { flex: 1; background: #fff; border-radius: 8px; padding: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+        h2 { border-bottom: 2px solid #2563eb; padding-bottom: 8px; color: #1e3a8a; }
+        .form-group { margin-bottom: 12px; }
+        label { display: block; margin-bottom: 4px; font-weight: bold; font-size: 13px; }
+        input, select { width: 100%; padding: 8px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
+        button { background: #2563eb; color: white; border: none; padding: 8px 14px; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        button:hover { background: #1d4ed8; }
+        button:disabled { background: #9ca3af; cursor: not-allowed; }
+        .card { border: 1px solid #e5e7eb; padding: 12px; border-radius: 6px; margin-bottom: 10px; background: #fafafa; }
+        .status { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: bold; }
+        .status-1 { background: #dbeafe; color: #1e40af; }
+        .status-2 { background: #dcfce7; color: #14532d; }
+        .status-3 { background: #fee2e2; color: #991b1b; }
+        .auth-card { max-width: 1300px; margin: 0 auto; background: #fff; border-radius: 8px; padding: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+        .auth-row { display: flex; gap: 20px; flex-wrap: wrap; }
+        .auth-panel { flex: 1; min-width: 280px; }
+        .auth-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+        .status-badge { padding: 6px 10px; border-radius: 999px; background: #fef3c7; color: #92400e; font-size: 13px; }
+        .auth-tip { margin-top: 12px; color: #6b7280; font-size: 13px; }
+    </style>
+</head>
+<body>
+
+<h1 style="text-align: center; color: #1e3a8a; margin-bottom: 5px;">在线预约系统数字化平台</h1>
+<p style="text-align: center; color: #666; margin-top: 0;">后端技术栈：C++11 + cpp-httplib + SQLite3</p>
+
+<div class="auth-card">
+    <div class="auth-header">
+        <h3 style="margin:0;">账户中心</h3>
+        <div id="auth-status" class="status-badge">未登录</div>
+    </div>
+    <div class="auth-row">
+        <div class="auth-panel">
+            <h4>注册账号</h4>
+            <div class="form-group">
+                <label>用户名</label>
+                <input type="text" id="reg-username" placeholder="请输入用户名">
+            </div>
+            <div class="form-group">
+                <label>手机号</label>
+                <input type="text" id="reg-phone" placeholder="请输入手机号">
+            </div>
+            <div class="form-group">
+                <label>密码</label>
+                <input type="password" id="reg-password" placeholder="请输入密码">
+            </div>
+            <button onclick="registerUser()">注册</button>
+        </div>
+        <div class="auth-panel">
+            <h4>登录账号</h4>
+            <div class="form-group">
+                <label>手机号</label>
+                <input type="text" id="login-phone" placeholder="请输入手机号">
+            </div>
+            <div class="form-group">
+                <label>密码</label>
+                <input type="password" id="login-password" placeholder="请输入密码">
+            </div>
+            <button onclick="loginUser()">登录</button>
+            <button onclick="logoutUser()" style="background:#6b7280; margin-left:8px;">退出登录</button>
+        </div>
+    </div>
+    <div id="auth-tip" class="auth-tip">请先登录后再预约服务。</div>
+</div>
+
+<div class="container">
+    <div class="panel">
+        <h2>用户操作区</h2>
+        <h3>1. 可预约服务项目</h3>
+        <div id="service-list">正在加载可选服务...</div>
+
+        <h3>2. 我的预约看板</h3>
+        <div id="user-orders">暂无预约明细</div>
+    </div>
+
+    <div class="panel" style="border-top: 4px solid #059669;">
+        <h2 style="color: #065f46;">商家控制台</h2>
+        <h3>1. 发布新服务</h3>
+        <div class="card">
+            <div class="form-group">
+                <label>服务名称</label>
+                <input type="text" id="new-name" placeholder="例：精细织发">
+            </div>
+            <div class="form-group">
+                <label>类别描述</label>
+                <input type="text" id="new-cate" placeholder="美容美发">
+            </div>
+            <div class="form-group">
+                <label>服务定价 (元)</label>
+                <input type="number" id="new-price" placeholder="60">
+            </div>
+            <div class="form-group">
+                <label>时长 (分钟)</label>
+                <input type="number" id="new-duration" placeholder="45">
+            </div>
+            <button onclick="publishService()" style="background: #059669;">确认发布上架</button>
+        </div>
+
+        <h3>2. 实时排单流水与到店核销</h3>
+        <div id="merchant-orders">暂无排班记录</div>
+    </div>
+</div>
+
+<script>
+    let currentUser = null;
+    const MERCHANT_ID = 1;
+
+    const statusMap = {
+        1: "已预约",
+        2: "已完成",
+        3: "已取消"
+    };
+
+    function updateAuthUI() {
+        const badge = document.getElementById('auth-status');
+        const tip = document.getElementById('auth-tip');
+        if (currentUser) {
+            badge.textContent = `已登录：${currentUser.Username}`;
+            badge.style.background = '#dcfce7';
+            badge.style.color = '#166534';
+            tip.textContent = `当前账号：${currentUser.Username}（${currentUser.PhoneNumber}）`; 
+        } else {
+            badge.textContent = '未登录';
+            badge.style.background = '#fef3c7';
+            badge.style.color = '#92400e';
+            tip.textContent = '请先登录后再预约服务。';
+        }
+    }
+
+    function saveSession(user) {
+        currentUser = user;
+        localStorage.setItem('currentUser', JSON.stringify(user));
+        updateAuthUI();
+    }
+
+    function clearSession() {
+        currentUser = null;
+        localStorage.removeItem('currentUser');
+        updateAuthUI();
+    }
+
+    function restoreSession() {
+        try {
+            const saved = localStorage.getItem('currentUser');
+            if (saved) {
+                currentUser = JSON.parse(saved);
+            }
+        } catch (e) {
+            currentUser = null;
+        }
+        updateAuthUI();
+    }
+
+    window.onload = function() {
+        restoreSession();
+        loadServices();
+        loadOrders();
+    };
+
+    function registerUser() {
+        const username = document.getElementById('reg-username').value.trim();
+        const phone = document.getElementById('reg-phone').value.trim();
+        const password = document.getElementById('reg-password').value;
+        if (!username || !phone || !password) return alert('请完整填写注册信息');
+
+        fetch('/api/auth/register', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ Username: username, PhoneNumber: phone, Password: password })
+        }).then(res => res.json()).then(res => {
+            alert(res.message);
+            if (res.success) {
+                saveSession(res.user);
+            }
+        });
+    }
+
+    function loginUser() {
+        const phone = document.getElementById('login-phone').value.trim();
+        const password = document.getElementById('login-password').value;
+        if (!phone || !password) return alert('请输入手机号和密码');
+
+        fetch('/api/auth/login', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ PhoneNumber: phone, Password: password })
+        }).then(res => res.json()).then(res => {
+            alert(res.message);
+            if (res.success) {
+                saveSession(res.user);
+            }
+        });
+    }
+
+    function logoutUser() {
+        clearSession();
+        alert('已退出登录');
+    }
+
+    function loadServices() {
+        fetch('/api/services')
+            .then(res => res.json())
+            .then(data => {
+                let html = '';
+                data.forEach(srv => {
+                    html += `
+                        <div class="card">
+                            <strong>${srv.ServiceName}</strong> <span style="font-size:11px; color:#666;">[${srv.Category}]</span>
+                            <p style="margin:4px 0; color:#d97706;">费用: ￥${srv.Price} | 时长: ${srv.Duration}分钟</p>
+                            <div class="form-group">
+                                <select id="time-${srv.ServiceID}">
+                                    <option value="2026-07-08 10:00">明天 10:00-11:00</option>
+                                    <option value="2026-07-08 15:00">明天 15:00-16:00</option>
+                                </select>
+                            </div>
+                            <button onclick="bookService(${srv.ServiceID})" ${currentUser ? '' : 'disabled'}>立即预约</button>
+                        </div>`;
+                });
+                document.getElementById('service-list').innerHTML = html || '暂无可用服务';
+            });
+    }
+
+    function loadOrders() {
+        fetch('/api/appointments')
+            .then(res => res.json())
+            .then(data => {
+                let uHtml = '', mHtml = '';
+                data.forEach(app => {
+                    let txt = statusMap[app.Status] || "未知";
+
+                    uHtml += `<div class="card">
+                        <p><strong>项目:</strong> ${app.ServiceName} <span class="status status-${app.Status}">${txt}</span></p>
+                        <p style="font-size:12px;color:#555;">时段: ${app.AppointmentTime}</p>`;
+                    if(app.Status === 1) {
+                        uHtml += `<button onclick="cancelApp(${app.AppointmentID})" style="background:#dc2626;padding:4px 8px;font-size:12px;">取消订单</button>`;
+                    } else if(app.Status === 2) {
+                        uHtml += `<div style="margin-top:8px;">
+                            <input type="number" id="rate-${app.AppointmentID}" placeholder="评分(1-5)" style="width:70px;display:inline;">
+                            <input type="text" id="comm-${app.AppointmentID}" placeholder="输入反馈意见" style="width:140px;display:inline;">
+                            <button onclick="submitReview(${app.AppointmentID})" style="background:#7c3aed;padding:4px 8px;font-size:12px;">评价</button>
+                        </div>`;
+                    }
+                    uHtml += `</div>`;
+
+                    mHtml += `<div class="card">
+                        <p><strong>单号:</strong> #00${app.AppointmentID} | <strong>顾客:</strong> ${app.Username}</p>
+                        <p style="font-size:12px;">${app.ServiceName} (${app.AppointmentTime})</p>
+                        <p>当前状态: <span class="status status-${app.Status}">${txt}</span></p>`;
+                    if(app.Status === 1) {
+                        mHtml += `<button onclick="completeApp(${app.AppointmentID})" style="background:#059669;padding:4px 8px;font-size:12px;">确认到店核销</button>`;
+                    }
+                    mHtml += `</div>`;
+                });
+                document.getElementById('user-orders').innerHTML = uHtml || '暂无预约历史';
+                document.getElementById('merchant-orders').innerHTML = mHtml || '全店暂无业务流水';
+            });
+    }
+
+    function bookService(srvId) {
+        if (!currentUser) return alert('请先登录后再预约');
+        const time = document.getElementById(`time-${srvId}`).value;
+        fetch('/api/appointments', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ UserID: currentUser.UserID, ServiceID: srvId, AppointmentTime: time })
+        }).then(res => res.json()).then(res => { alert(res.message); loadOrders(); });
+    }
+
+    function cancelApp(appId) {
+        fetch('/api/appointments/cancel', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ AppointmentID: appId })
+        }).then(res => res.json()).then(res => { alert(res.message); loadOrders(); });
+    }
+
+    function completeApp(appId) {
+        fetch('/api/appointments/complete', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ AppointmentID: appId })
+        }).then(res => res.json()).then(res => { alert(res.message); loadOrders(); });
+    }
+
+    function submitReview(appId) {
+        const r = parseInt(document.getElementById(`rate-${appId}`).value);
+        const c = document.getElementById(`comm-${appId}`).value;
+        if(!r || r < 1 || r > 5) return alert("请输入1-5的有效整数评分");
+
+        fetch('/api/reviews', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ AppointmentID: appId, Rating: r, CommentContent: c })
+        }).then(res => res.json()).then(res => { alert(res.message); loadOrders(); });
+    }
+
+    function publishService() {
+        const name = document.getElementById('new-name').value;
+        const cate = document.getElementById('new-cate').value;
+        const price = parseInt(document.getElementById('new-price').value);
+        const dur = parseInt(document.getElementById('new-duration').value);
+
+        if(!name || !price || !dur) return alert("请完整填写表单参数");
+
+        fetch('/api/merchant/service', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ MerchantID: MERCHANT_ID, ServiceName: name, Category: cate, Price: price, Duration: dur })
+        }).then(res => res.json()).then(res => {
+            alert(res.message);
+            loadServices();
+        });
+    }
+</script>
+</body>
+</html>
