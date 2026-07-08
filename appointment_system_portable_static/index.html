@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>在线预约系统</title>
+<style>
+:root{--blue:#2563eb;--green:#059669;--red:#dc2626;--bg:#f3f4f6;--card:#fff;--text:#111827;--muted:#6b7280;--line:#e5e7eb;}
+*{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",Arial,sans-serif;} header{background:linear-gradient(135deg,#1e3a8a,#2563eb);color:white;padding:24px 18px;text-align:center} header h1{margin:0 0 8px;font-size:28px} header p{margin:0;opacity:.9}.wrap{max-width:1280px;margin:18px auto;padding:0 16px}.grid{display:grid;grid-template-columns:1.05fr .95fr;gap:18px}.card{background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:0 4px 14px rgba(15,23,42,.06);padding:18px;margin-bottom:14px}.card h2,.card h3{margin-top:0}.row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.row3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}label{display:block;font-size:13px;font-weight:700;margin:8px 0 5px}input,select,textarea{width:100%;border:1px solid #d1d5db;border-radius:8px;padding:9px 10px;font-size:14px;background:#fff}textarea{min-height:70px}button{border:0;border-radius:8px;padding:9px 12px;font-weight:700;cursor:pointer;background:var(--blue);color:white;margin:4px 4px 4px 0}button:hover{filter:brightness(.95)}button:disabled{background:#9ca3af;cursor:not-allowed}.btn-green{background:var(--green)}.btn-red{background:var(--red)}.btn-gray{background:#6b7280}.muted{color:var(--muted);font-size:13px}.badge{display:inline-block;border-radius:999px;padding:3px 9px;font-size:12px;font-weight:700}.s1{background:#fef3c7;color:#92400e}.s2{background:#dbeafe;color:#1e40af}.s3{background:#fee2e2;color:#991b1b}.s4{background:#dcfce7;color:#166534}.service{border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:12px;background:#fbfdff}.service-title{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}.price{color:#d97706;font-weight:800}.notice{border-left:4px solid var(--blue);background:#eff6ff;padding:10px;border-radius:8px;margin:8px 0}.tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}.tab{background:#e5e7eb;color:#111827}.tab.active{background:var(--blue);color:white}.hidden{display:none!important}.mini{font-size:12px;padding:5px 8px}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.stat{background:#f9fafb;border:1px solid var(--line);border-radius:10px;padding:12px;text-align:center}.stat strong{display:block;font-size:22px;color:#1e3a8a}table{width:100%;border-collapse:collapse;font-size:13px}th,td{border-bottom:1px solid var(--line);padding:8px;text-align:left}.schedule{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}.schedule label{font-weight:500;background:#f9fafb;border:1px solid var(--line);border-radius:8px;padding:8px;text-align:center}.schedule input{width:auto}@media(max-width:900px){.grid,.row,.row3{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,1fr)}.schedule{grid-template-columns:repeat(2,1fr)}header h1{font-size:23px}button{width:100%;margin-left:0}.service-title{display:block}}
+</style>
+</head>
+<body>
+<header><h1>在线预约系统数字化平台</h1><p>C++11 + cpp-httplib + SQLite3，支持用户预约、商家发布、排班、通知、评价与移动端适配</p></header>
+<div class="wrap">
+  <div class="card">
+    <div class="tabs"><button id="tab-user" class="tab active" onclick="showTab('user')">用户端</button><button id="tab-merchant" class="tab" onclick="showTab('merchant')">商家端</button><button class="tab" onclick="refreshAll()">刷新数据</button></div>
+    <div id="session-tip" class="notice">默认测试账号：用户 13311112222 / 123456；商家 13800001111 / 123456</div>
+  </div>
+
+  <section id="user-section">
+    <div class="grid">
+      <div>
+        <div class="card">
+          <h2>用户登录 / 注册</h2>
+          <div id="user-status" class="notice">当前未登录</div>
+          <div class="row">
+            <div><h3>登录</h3><label>手机号</label><input id="login-phone" value="13311112222"><label>密码</label><input id="login-password" type="password" value="123456"><button onclick="loginUser()">用户登录</button><button class="btn-gray" onclick="logoutUser()">退出</button></div>
+            <div><h3>注册</h3><label>用户名</label><input id="reg-username" placeholder="例如：张三"><label>手机号</label><input id="reg-phone" placeholder="请输入手机号"><label>密码</label><input id="reg-password" type="password" placeholder="至少6位"><button onclick="registerUser()">注册并登录</button></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>服务搜索与预约</h2>
+          <div class="row3"><div><label>关键词</label><input id="search-keyword" placeholder="医疗、美容、健身或店铺名"></div><div><label>分类</label><input id="search-category" placeholder="例如：医疗健康"></div><div style="align-self:end"><button onclick="loadServices()">搜索服务</button></div></div>
+          <div id="service-list" style="margin-top:12px">正在加载...</div>
+        </div>
+      </div>
+      <div>
+        <div class="card"><h2>我的预约</h2><div id="user-orders">请先登录</div></div>
+        <div class="card"><h2>我的通知</h2><div id="user-notices">暂无通知</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="merchant-section" class="hidden">
+    <div class="grid">
+      <div>
+        <div class="card">
+          <h2>商家登录 / 注册</h2><div id="merchant-status" class="notice">当前未登录商家</div>
+          <div class="row">
+            <div><h3>登录</h3><label>商家手机号</label><input id="m-login-phone" value="13800001111"><label>密码</label><input id="m-login-password" type="password" value="123456"><button class="btn-green" onclick="loginMerchant()">商家登录</button><button class="btn-gray" onclick="logoutMerchant()">退出</button></div>
+            <div><h3>注册</h3><label>店铺名称</label><input id="m-reg-shop" placeholder="例如：校园健康中心"><label>手机号</label><input id="m-reg-phone"><label>地址</label><input id="m-reg-address"><label>密码</label><input id="m-reg-password" type="password"><button class="btn-green" onclick="registerMerchant()">注册商家</button></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>发布服务</h2>
+          <div class="row3"><div><label>服务名称</label><input id="new-name" placeholder="例：体检预约"></div><div><label>分类</label><input id="new-cate" placeholder="医疗健康/美容护理/健身运动"></div><div><label>价格</label><input id="new-price" type="number" value="99"></div><div><label>时长/分钟</label><input id="new-duration" type="number" value="30"></div><div><label>同一时段容量</label><input id="new-capacity" type="number" value="1"></div><div style="align-self:end"><button class="btn-green" onclick="publishService()">发布服务</button></div></div>
+        </div>
+
+        <div class="card"><h2>每周排班</h2><div id="schedule-box" class="schedule"></div><button class="btn-green" onclick="saveSchedule()">保存排班</button><p class="muted">默认周一至周五营业，周六周日休息；用户不能预约休息日。</p></div>
+      </div>
+      <div>
+        <div class="card"><h2>业务数据概览</h2><div id="merchant-stats" class="stats"></div></div>
+        <div class="card"><h2>排单与核销</h2><div id="merchant-orders">请先登录商家</div></div>
+        <div class="card"><h2>商家通知</h2><div id="merchant-notices">暂无通知</div></div>
+        <div class="card"><h2>用户评价</h2><div id="merchant-reviews">暂无评价</div></div>
+      </div>
+    </div>
+  </section>
+</div>
+<script>
+let currentUser=null,currentMerchant=null;
+const dayNames=['周日','周一','周二','周三','周四','周五','周六'];
+const statusClass={1:'s1',2:'s2',3:'s3',4:'s4'};
+function $(id){return document.getElementById(id)}
+async function api(url,opt={}){const r=await fetch(url,opt);let d={};try{d=await r.json()}catch(e){};if(!r.ok&&d.message)throw new Error(d.message);return d}
+function showTab(t){$('user-section').classList.toggle('hidden',t!=='user');$('merchant-section').classList.toggle('hidden',t!=='merchant');$('tab-user').classList.toggle('active',t==='user');$('tab-merchant').classList.toggle('active',t==='merchant')}
+function updateSession(){
+ $('user-status').innerHTML=currentUser?`已登录用户：<b>${currentUser.Username}</b>（${currentUser.PhoneNumber}）`:'当前未登录';
+ $('merchant-status').innerHTML=currentMerchant?`已登录商家：<b>${currentMerchant.ShopName}</b>（ID ${currentMerchant.MerchantID}）`:'当前未登录商家';
+}
+function save(){localStorage.setItem('currentUser',JSON.stringify(currentUser));localStorage.setItem('currentMerchant',JSON.stringify(currentMerchant));updateSession()}
+function restore(){try{currentUser=JSON.parse(localStorage.getItem('currentUser'))}catch(e){};try{currentMerchant=JSON.parse(localStorage.getItem('currentMerchant'))}catch(e){};updateSession()}
+function logoutUser(){currentUser=null;save();loadUserOrders();loadServices();loadUserNotices()} function logoutMerchant(){currentMerchant=null;save();loadMerchantData()}
+async function registerUser(){try{let d=await api('/api/auth/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({Username:$('reg-username').value.trim(),PhoneNumber:$('reg-phone').value.trim(),Password:$('reg-password').value})});alert(d.message);currentUser=d.user;save();refreshAll()}catch(e){alert(e.message)}}
+async function loginUser(){try{let d=await api('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({PhoneNumber:$('login-phone').value.trim(),Password:$('login-password').value})});currentUser=d.user;save();refreshAll()}catch(e){alert(e.message)}}
+async function registerMerchant(){try{let d=await api('/api/merchant/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ShopName:$('m-reg-shop').value.trim(),MerchantPhone:$('m-reg-phone').value.trim(),Address:$('m-reg-address').value.trim(),Password:$('m-reg-password').value})});alert(d.message);currentMerchant=d.merchant;save();refreshAll()}catch(e){alert(e.message)}}
+async function loginMerchant(){try{let d=await api('/api/merchant/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({MerchantPhone:$('m-login-phone').value.trim(),Password:$('m-login-password').value})});currentMerchant=d.merchant;save();refreshAll()}catch(e){alert(e.message)}}
+function slotOptions(id){let html=`<select id="time-${id}">`;let now=new Date();let hours=['09:00','10:00','14:00','15:00','16:00'];for(let i=1;i<=10;i++){let d=new Date(now.getFullYear(),now.getMonth(),now.getDate()+i);let yyyy=d.getFullYear(),mm=String(d.getMonth()+1).padStart(2,'0'),dd=String(d.getDate()).padStart(2,'0');for(let h of hours){html+=`<option value="${yyyy}-${mm}-${dd} ${h}">${mm}-${dd} ${dayNames[d.getDay()]} ${h}</option>`}}return html+'</select>'}
+async function loadServices(){try{let qs=new URLSearchParams({keyword:$('search-keyword').value.trim(),category:$('search-category').value.trim()});let data=await api('/api/services?'+qs.toString());let html='';data.forEach(s=>{html+=`<div class="service"><div class="service-title"><div><b>${s.ServiceName}</b> <span class="badge s2">${s.Category}</span><p class="muted">商家：${s.ShopName}｜地址：${s.Address||'未填写'}｜容量：${s.Capacity}/时段</p></div><div class="price">￥${s.Price}</div></div><p class="muted">时长 ${s.Duration} 分钟｜评分 ${Number(s.AvgRating).toFixed(1)}（${s.ReviewCount}条评价）</p><label>选择预约时间</label>${slotOptions(s.ServiceID)}<button ${currentUser?'':'disabled'} onclick="bookService(${s.ServiceID})">立即预约</button>${currentMerchant&&currentMerchant.MerchantID===s.MerchantID?`<button class="btn-red" onclick="deleteService(${s.ServiceID})">下架服务</button>`:''}</div>`});$('service-list').innerHTML=html||'暂无符合条件的服务'}catch(e){$('service-list').innerHTML=e.message}}
+async function bookService(id){if(!currentUser)return alert('请先登录用户账号');try{let d=await api('/api/appointments',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({UserID:currentUser.UserID,ServiceID:id,AppointmentTime:$('time-'+id).value})});alert(d.message);refreshAll()}catch(e){alert(e.message)}}
+async function loadUserOrders(){if(!currentUser){$('user-orders').innerHTML='请先登录';return}try{let data=await api('/api/appointments?UserID='+currentUser.UserID);let html='';data.forEach(a=>{html+=`<div class="service"><b>${a.ServiceName}</b> <span class="badge ${statusClass[a.Status]}">${a.StatusText}</span><p class="muted">${a.ShopName}｜${a.AppointmentTime}｜￥${a.Price}</p>`;if(a.Status===1||a.Status===2)html+=`<button class="btn-red mini" onclick="cancelApp(${a.AppointmentID})">取消预约</button>`;if(a.Status===4&&!a.HasReview)html+=`<div class="row"><input id="rate-${a.AppointmentID}" type="number" min="1" max="5" placeholder="评分1-5"><input id="comm-${a.AppointmentID}" placeholder="评价内容"></div><button class="mini" onclick="submitReview(${a.AppointmentID})">提交评价</button>`;html+='</div>'});$('user-orders').innerHTML=html||'暂无预约记录'}catch(e){$('user-orders').innerHTML=e.message}}
+async function cancelApp(id){if(!confirm('确定取消该预约吗？'))return;try{let d=await api('/api/appointments/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({AppointmentID:id,UserID:currentUser.UserID})});alert(d.message);refreshAll()}catch(e){alert(e.message)}}
+async function submitReview(id){try{let r=parseInt($('rate-'+id).value);let c=$('comm-'+id).value.trim();let d=await api('/api/reviews',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({AppointmentID:id,UserID:currentUser.UserID,Rating:r,CommentContent:c})});alert(d.message);refreshAll()}catch(e){alert(e.message)}}
+async function publishService(){if(!currentMerchant)return alert('请先登录商家');try{let d=await api('/api/merchant/service',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({MerchantID:currentMerchant.MerchantID,ServiceName:$('new-name').value.trim(),Category:$('new-cate').value.trim(),Price:parseInt($('new-price').value),Duration:parseInt($('new-duration').value),Capacity:parseInt($('new-capacity').value)})});alert(d.message);refreshAll()}catch(e){alert(e.message)}}
+async function deleteService(id){if(!currentMerchant||!confirm('下架后历史预约会保留，确定继续？'))return;try{let d=await api('/api/merchant/service/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({MerchantID:currentMerchant.MerchantID,ServiceID:id})});alert(d.message);refreshAll()}catch(e){alert(e.message)}}
+async function loadSchedule(){if(!currentMerchant){$('schedule-box').innerHTML='请先登录商家';return}let data=await api('/api/merchant/schedule?MerchantID='+currentMerchant.MerchantID);let map={};data.forEach(x=>map[x.DayOfWeek]=x.IsWorkingDay);let html='';for(let i=0;i<7;i++)html+=`<label><input type="checkbox" id="day-${i}" ${map[i]?'checked':''}> ${dayNames[i]}</label>`;$('schedule-box').innerHTML=html}
+async function saveSchedule(){if(!currentMerchant)return alert('请先登录商家');let arr=[];for(let i=0;i<7;i++)arr.push({DayOfWeek:i,IsWorkingDay:$('day-'+i).checked?1:0});try{let d=await api('/api/merchant/schedule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({MerchantID:currentMerchant.MerchantID,Schedule:arr})});alert(d.message)}catch(e){alert(e.message)}}
+async function loadMerchantData(){if(!currentMerchant){$('merchant-orders').innerHTML='请先登录商家';$('merchant-stats').innerHTML='';$('merchant-notices').innerHTML='暂无通知';$('merchant-reviews').innerHTML='暂无评价';return}await loadSchedule();try{let data=await api('/api/appointments?MerchantID='+currentMerchant.MerchantID);let counts={1:0,2:0,3:0,4:0};data.forEach(a=>counts[a.Status]=(counts[a.Status]||0)+1);$('merchant-stats').innerHTML=`<div class="stat"><strong>${counts[1]}</strong>待确认</div><div class="stat"><strong>${counts[2]}</strong>已确认</div><div class="stat"><strong>${counts[4]}</strong>已完成</div><div class="stat"><strong>${data.length}</strong>总订单</div>`;let html='';data.forEach(a=>{html+=`<div class="service"><b>#${a.AppointmentID} ${a.ServiceName}</b> <span class="badge ${statusClass[a.Status]}">${a.StatusText}</span><p class="muted">用户：${a.Username}（${a.PhoneNumber}）｜${a.AppointmentTime}</p>`;if(a.Status===1)html+=`<button class="btn-green mini" onclick="confirmApp(${a.AppointmentID})">确认预约</button><button class="btn-red mini" onclick="merchantCancel(${a.AppointmentID})">拒绝/取消</button>`;if(a.Status===2)html+=`<button class="btn-green mini" onclick="completeApp(${a.AppointmentID})">到店核销</button><button class="btn-red mini" onclick="merchantCancel(${a.AppointmentID})">取消</button>`;html+='</div>'});$('merchant-orders').innerHTML=html||'暂无预约'}catch(e){$('merchant-orders').innerHTML=e.message}loadMerchantNotices();loadMerchantReviews()}
+async function confirmApp(id){try{let d=await api('/api/merchant/appointments/confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({MerchantID:currentMerchant.MerchantID,AppointmentID:id})});alert(d.message);refreshAll()}catch(e){alert(e.message)}}
+async function completeApp(id){try{let d=await api('/api/appointments/complete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({MerchantID:currentMerchant.MerchantID,AppointmentID:id})});alert(d.message);refreshAll()}catch(e){alert(e.message)}}
+async function merchantCancel(id){if(!confirm('确定由商家取消该预约吗？'))return;try{let d=await api('/api/appointments/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({MerchantID:currentMerchant.MerchantID,AppointmentID:id})});alert(d.message);refreshAll()}catch(e){alert(e.message)}}
+async function loadUserNotices(){if(!currentUser){$('user-notices').innerHTML='暂无通知';return}try{let data=await api('/api/user/notifications?UserID='+currentUser.UserID);$('user-notices').innerHTML=data.map(n=>`<div class="notice"><b>${n.Message}</b><br><span class="muted">预约#${n.AppointmentID}｜${n.CreatedAt}</span></div>`).join('')||'暂无通知'}catch(e){$('user-notices').innerHTML=e.message}}
+async function loadMerchantNotices(){if(!currentMerchant)return;try{let data=await api('/api/merchant/notifications?MerchantID='+currentMerchant.MerchantID);$('merchant-notices').innerHTML=data.map(n=>`<div class="notice"><b>${n.Message}</b><br><span class="muted">预约#${n.AppointmentID}｜${n.CreatedAt}</span></div>`).join('')||'暂无通知'}catch(e){$('merchant-notices').innerHTML=e.message}}
+async function loadMerchantReviews(){if(!currentMerchant)return;try{let data=await api('/api/reviews?MerchantID='+currentMerchant.MerchantID);$('merchant-reviews').innerHTML=data.map(r=>`<div class="service"><b>${r.ServiceName}</b> <span class="badge s4">${r.Rating}分</span><p>${r.CommentContent||'无文字评价'}</p><p class="muted">${r.Username}｜${r.CreatedAt}</p></div>`).join('')||'暂无评价'}catch(e){$('merchant-reviews').innerHTML=e.message}}
+function refreshAll(){updateSession();loadServices();loadUserOrders();loadUserNotices();loadMerchantData()}
+window.onload=function(){restore();refreshAll()}
+</script>
+</body></html>
