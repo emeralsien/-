@@ -801,8 +801,8 @@ int main() {
         res.set_content(ret.dump(), "application/json; charset=utf-8");
     });
 
-    std::cout << "Server started at http://127.0.0.1:8080" << std::endl;
-    svr.listen("127.0.0.1", 8080);
+    std::cout << "Server started at http://0.0.0.0:8080" << std::endl;
+    svr.listen("0.0.0.0", 8080);
 
     sqlite3_close(db);
     return 0;
