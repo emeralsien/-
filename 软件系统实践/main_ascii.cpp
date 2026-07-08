@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstdlib>
 #include <ctime>
 #include <fstream>
@@ -11,6 +12,22 @@
 #include "json.hpp"
 
 sqlite3* db = nullptr;
+
+std::string normalize_text_value(const std::string& value, const std::string& fallback) {
+    if (value.empty()) {
+        return fallback;
+    }
+    std::string normalized = value;
+    if (normalized == "??" || normalized == "？？") {
+        return fallback;
+    }
+    if (std::all_of(normalized.begin(), normalized.end(), [](unsigned char c) {
+            return c == '?' || c == '？';
+        })) {
+        return fallback;
+    }
+    return normalized;
+}
 
 bool table_has_column(const std::string& table_name, const std::string& column_name) {
     sqlite3_stmt* stmt = nullptr;
@@ -44,8 +61,8 @@ void ensure_service_capacity_column() {
 std::string status_to_string(int status) {
     switch (status) {
         case 1: return "PendingConfirmation";
-        case 2: return "Booked";
-        case 3: return "Completed";
+        case 2: return "Completed";
+        case 3: return "Cancelled";
         case 4: return "Cancelled";
         default: return "Unknown";
     }
@@ -209,6 +226,15 @@ void init_db() {
     }
     sqlite3_finalize(stmt);
 
+    if (sqlite3_exec(db, "INSERT OR IGNORE INTO t_service (ServiceID, MerchantID, ServiceName, Category, Price, Duration, Capacity) VALUES (3, 1, 'Service3', 'Category2', 99, 90, 2);", nullptr, nullptr, &err_msg) != SQLITE_OK) {
+        std::cerr << "Error ensuring service 3: " << err_msg << std::endl;
+        sqlite3_free(err_msg);
+    }
+    if (sqlite3_exec(db, "UPDATE t_service SET ServiceName = 'Service3', Category = 'Category2', Price = 99, Duration = 90, Capacity = 2 WHERE ServiceID = 3;", nullptr, nullptr, &err_msg) != SQLITE_OK) {
+        std::cerr << "Error updating service 3: " << err_msg << std::endl;
+        sqlite3_free(err_msg);
+    }
+
     if (sqlite3_exec(db, "INSERT OR IGNORE INTO t_schedule (MerchantID, DayOfWeek, IsWorkingDay) VALUES (1, 0, 0), (1, 1, 1), (1, 2, 1), (1, 3, 1), (1, 4, 1), (1, 5, 1), (1, 6, 0);", nullptr, nullptr, &err_msg) != SQLITE_OK) {
         std::cerr << "Error inserting default schedule: " << err_msg << std::endl;
         sqlite3_free(err_msg);
@@ -337,8 +363,8 @@ int main() {
                 nlohmann::json item;
                 item["ServiceID"] = sqlite3_column_int(stmt, 0);
                 item["MerchantID"] = sqlite3_column_int(stmt, 1);
-                item["ServiceName"] = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
-                item["Category"] = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+                item["ServiceName"] = normalize_text_value(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2)), "未命名服务");
+                item["Category"] = normalize_text_value(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3)), "未分类");
                 item["Price"] = sqlite3_column_int(stmt, 4);
                 item["Duration"] = sqlite3_column_int(stmt, 5);
                 item["Capacity"] = sqlite3_column_int(stmt, 6);
@@ -386,6 +412,57 @@ int main() {
 
             ret["success"] = true;
             ret["message"] = "Service added successfully";
+        } catch (const std::exception& e) {
+            ret["success"] = false;
+            ret["message"] = std::string("Request format error: ") + e.what();
+            res.status = 400;
+        }
+        res.set_content(ret.dump(), "application/json; charset=utf-8");
+    });
+
+    svr.Post("/api/merchant/service/delete", [](const httplib::Request& req, httplib::Response& res) {
+        nlohmann::json ret;
+        try {
+            auto data = nlohmann::json::parse(req.body);
+            int merchant_id = data["MerchantID"].get<int>();
+            int service_id = data["ServiceID"].get<int>();
+
+            sqlite3_stmt* notif_stmt = nullptr;
+            const char* notif_sql = "DELETE FROM t_notification WHERE AppointmentID IN (SELECT AppointmentID FROM t_appointment WHERE ServiceID = ?);";
+            if (sqlite3_prepare_v2(db, notif_sql, -1, &notif_stmt, nullptr) == SQLITE_OK) {
+                sqlite3_bind_int(notif_stmt, 1, service_id);
+                sqlite3_step(notif_stmt);
+            }
+            sqlite3_finalize(notif_stmt);
+
+            sqlite3_stmt* appointment_stmt = nullptr;
+            const char* appointment_sql = "DELETE FROM t_appointment WHERE ServiceID = ?;";
+            if (sqlite3_prepare_v2(db, appointment_sql, -1, &appointment_stmt, nullptr) == SQLITE_OK) {
+                sqlite3_bind_int(appointment_stmt, 1, service_id);
+                sqlite3_step(appointment_stmt);
+            }
+            sqlite3_finalize(appointment_stmt);
+
+            sqlite3_stmt* service_stmt = nullptr;
+            const char* service_sql = "DELETE FROM t_service WHERE ServiceID = ? AND MerchantID = ?;";
+            bool deleted = false;
+            if (sqlite3_prepare_v2(db, service_sql, -1, &service_stmt, nullptr) == SQLITE_OK) {
+                sqlite3_bind_int(service_stmt, 1, service_id);
+                sqlite3_bind_int(service_stmt, 2, merchant_id);
+                if (sqlite3_step(service_stmt) == SQLITE_DONE) {
+                    deleted = sqlite3_changes(db) > 0;
+                }
+            }
+            sqlite3_finalize(service_stmt);
+
+            if (!deleted) {
+                ret["success"] = false;
+                ret["message"] = "Service not found or you do not have permission to delete it";
+                res.status = 404;
+            } else {
+                ret["success"] = true;
+                ret["message"] = "Service deleted successfully";
+            }
         } catch (const std::exception& e) {
             ret["success"] = false;
             ret["message"] = std::string("Request format error: ") + e.what();
@@ -527,7 +604,7 @@ int main() {
                 item["Status"] = sqlite3_column_int(stmt, 4);
                 item["StatusText"] = status_to_string(sqlite3_column_int(stmt, 4));
                 item["Username"] = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 5));
-                item["ServiceName"] = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));
+                item["ServiceName"] = normalize_text_value(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6)), "未命名服务");
                 item["Price"] = sqlite3_column_int(stmt, 7);
                 json_response.push_back(item);
             }
@@ -575,7 +652,7 @@ int main() {
                 item["Status"] = sqlite3_column_int(stmt, 4);
                 item["StatusText"] = status_to_string(sqlite3_column_int(stmt, 4));
                 item["Username"] = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 5));
-                item["ServiceName"] = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));
+                item["ServiceName"] = normalize_text_value(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6)), "未命名服务");
                 json_response.push_back(item);
             }
         }
@@ -646,7 +723,7 @@ int main() {
             int app_id = data["AppointmentID"].get<int>();
 
             sqlite3_stmt* stmt = nullptr;
-            const char* sql = "UPDATE t_appointment SET Status = 4 WHERE AppointmentID = ? AND Status IN (1, 2);";
+            const char* sql = "UPDATE t_appointment SET Status = 3 WHERE AppointmentID = ? AND Status IN (1, 2);";
             if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
                 sqlite3_bind_int(stmt, 1, app_id);
                 sqlite3_step(stmt);
@@ -670,7 +747,7 @@ int main() {
             int app_id = data["AppointmentID"].get<int>();
 
             sqlite3_stmt* stmt = nullptr;
-            const char* sql = "UPDATE t_appointment SET Status = 3 WHERE AppointmentID = ? AND Status = 2;";
+            const char* sql = "UPDATE t_appointment SET Status = 2 WHERE AppointmentID = ? AND Status IN (1, 2);";
             if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
                 sqlite3_bind_int(stmt, 1, app_id);
                 sqlite3_step(stmt);

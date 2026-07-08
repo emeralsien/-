@@ -2,6 +2,7 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>在线预约系统 - C++ 核心版本</title>
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f3f4f6; margin: 0; padding: 20px; color: #333; }
@@ -25,6 +26,17 @@
         .auth-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
         .status-badge { padding: 6px 10px; border-radius: 999px; background: #fef3c7; color: #92400e; font-size: 13px; }
         .auth-tip { margin-top: 12px; color: #6b7280; font-size: 13px; }
+        @media (max-width: 900px) {
+            .container { flex-direction: column; }
+            .panel { width: 100%; box-sizing: border-box; }
+            .auth-row { flex-direction: column; }
+        }
+        @media (max-width: 600px) {
+            body { padding: 12px; }
+            .auth-card, .panel { padding: 14px; }
+            .auth-header { flex-direction: column; align-items: flex-start; gap: 8px; }
+            button { width: 100%; margin-top: 6px; }
+        }
     </style>
 </head>
 <body>
@@ -116,7 +128,8 @@
     const statusMap = {
         1: "已预约",
         2: "已完成",
-        3: "已取消"
+        3: "已取消",
+        4: "已取消"
     };
 
     function updateAuthUI() {
@@ -222,6 +235,7 @@
                                 </select>
                             </div>
                             <button onclick="bookService(${srv.ServiceID})" ${currentUser ? '' : 'disabled'}>立即预约</button>
+                            <button onclick="deleteService(${srv.ServiceID})" style="background:#dc2626; margin-left:8px; padding:4px 8px; font-size:12px;">删除服务</button>
                         </div>`;
                 });
                 document.getElementById('service-list').innerHTML = html || '暂无可用服务';
@@ -234,7 +248,7 @@
             .then(data => {
                 let uHtml = '', mHtml = '';
                 data.forEach(app => {
-                    let txt = statusMap[app.Status] || "未知";
+                    let txt = app.StatusText || statusMap[app.Status] || "未知";
 
                     uHtml += `<div class="card">
                         <p><strong>项目:</strong> ${app.ServiceName} <span class="status status-${app.Status}">${txt}</span></p>
@@ -317,6 +331,20 @@
         }).then(res => res.json()).then(res => {
             alert(res.message);
             loadServices();
+            loadOrders();
+        });
+    }
+
+    function deleteService(serviceId) {
+        if (!confirm('确定要删除这个服务吗？')) return;
+        fetch('/api/merchant/service/delete', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ MerchantID: MERCHANT_ID, ServiceID: serviceId })
+        }).then(res => res.json()).then(res => {
+            alert(res.message);
+            loadServices();
+            loadOrders();
         });
     }
 </script>

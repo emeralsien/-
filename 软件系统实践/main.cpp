@@ -215,7 +215,7 @@ int main() {
             int app_id = data["AppointmentID"].get<int>();
 
             sqlite3_stmt* stmt;
-            const char* sql = "UPDATE t_appointment SET Status = 3 WHERE AppointmentID = ? AND Status = 1;";
+            const char* sql = "UPDATE t_appointment SET Status = 3 WHERE AppointmentID = ? AND Status IN (1, 2);";
             if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
                 sqlite3_bind_int(stmt, 1, app_id);
                 sqlite3_step(stmt);
@@ -239,7 +239,7 @@ int main() {
             int app_id = data["AppointmentID"].get<int>();
 
             sqlite3_stmt* stmt;
-            const char* sql = "UPDATE t_appointment SET Status = 2 WHERE AppointmentID = ? AND Status = 1;";
+            const char* sql = "UPDATE t_appointment SET Status = 2 WHERE AppointmentID = ? AND Status IN (1, 2);";
             if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
                 sqlite3_bind_int(stmt, 1, app_id);
                 sqlite3_step(stmt);
