@@ -18,6 +18,12 @@
 
 using json = nlohmann::json;
 
+// Direct compile commands for Windows:
+// MSVC (Developer Command Prompt):
+//   cl /EHsc /std:c++14 main.cpp sqlite3.c /link ws2_32.lib
+// MinGW/g++:
+//   g++ -std=c++11 main.cpp sqlite3.c -o appointment_server.exe -lws2_32
+
 sqlite3* db = nullptr;
 std::mutex db_mutex;
 
@@ -386,12 +392,17 @@ int main() {
         std::lock_guard<std::mutex> lock(db_mutex);
         std::string keyword = req.has_param("keyword") ? trim(req.get_param_value("keyword")) : "";
         std::string category = req.has_param("category") ? trim(req.get_param_value("category")) : "";
+        int merchant_id = req.has_param("MerchantID") ? std::stoi(req.get_param_value("MerchantID")) : 0;
         json arr = json::array();
-        std::string sql = "SELECT s.ServiceID,s.MerchantID,s.ServiceName,s.Category,s.Price,s.Duration,s.Capacity,m.ShopName,m.Address,"
+        std::string sql = "SELECT s.ServiceID,s.MerchantID,s.ServiceName,s.Category,s.Price,s.Duration,s.Capacity,s.IsActive,s.CreatedAt,m.ShopName,m.Address,"
                           "(SELECT COUNT(*) FROM t_review r JOIN t_appointment a ON r.AppointmentID=a.AppointmentID WHERE a.ServiceID=s.ServiceID) AS ReviewCount,"
                           "COALESCE((SELECT AVG(r.Rating) FROM t_review r JOIN t_appointment a ON r.AppointmentID=a.AppointmentID WHERE a.ServiceID=s.ServiceID),0) AS AvgRating "
-                          "FROM t_service s JOIN t_merchant m ON s.MerchantID=m.MerchantID WHERE s.IsActive=1";
+                          "FROM t_service s JOIN t_merchant m ON s.MerchantID=m.MerchantID WHERE 1=1";
         std::vector<std::string> params;
+        if (merchant_id > 0) {
+            sql += " AND s.MerchantID=?";
+            params.push_back(std::to_string(merchant_id));
+        }
         if (!keyword.empty()) { sql += " AND (s.ServiceName LIKE ? OR s.Category LIKE ? OR m.ShopName LIKE ?)"; params.push_back("%"+keyword+"%"); params.push_back("%"+keyword+"%"); params.push_back("%"+keyword+"%"); }
         if (!category.empty()) { sql += " AND s.Category LIKE ?"; params.push_back("%"+category+"%"); }
         sql += " ORDER BY s.ServiceID DESC;";
@@ -400,9 +411,19 @@ int main() {
             for (size_t i = 0; i < params.size(); ++i) sqlite3_bind_text(stmt, static_cast<int>(i+1), params[i].c_str(), -1, SQLITE_TRANSIENT);
             while (sqlite3_step(stmt) == SQLITE_ROW) {
                 json it;
-                it["ServiceID"] = sqlite3_column_int(stmt,0); it["MerchantID"] = sqlite3_column_int(stmt,1); it["ServiceName"] = safe_text(stmt,2); it["Category"] = safe_text(stmt,3);
-                it["Price"] = sqlite3_column_int(stmt,4); it["Duration"] = sqlite3_column_int(stmt,5); it["Capacity"] = sqlite3_column_int(stmt,6); it["ShopName"] = safe_text(stmt,7); it["Address"] = safe_text(stmt,8);
-                it["ReviewCount"] = sqlite3_column_int(stmt,9); it["AvgRating"] = sqlite3_column_double(stmt,10);
+                it["ServiceID"] = sqlite3_column_int(stmt,0);
+                it["MerchantID"] = sqlite3_column_int(stmt,1);
+                it["ServiceName"] = safe_text(stmt,2);
+                it["Category"] = safe_text(stmt,3);
+                it["Price"] = sqlite3_column_int(stmt,4);
+                it["Duration"] = sqlite3_column_int(stmt,5);
+                it["Capacity"] = sqlite3_column_int(stmt,6);
+                it["IsActive"] = sqlite3_column_int(stmt,7) == 1;
+                it["CreatedAt"] = safe_text(stmt,8);
+                it["ShopName"] = safe_text(stmt,9);
+                it["Address"] = safe_text(stmt,10);
+                it["ReviewCount"] = sqlite3_column_int(stmt,11);
+                it["AvgRating"] = sqlite3_column_double(stmt,12);
                 arr.push_back(it);
             }
         }
@@ -446,6 +467,22 @@ int main() {
             }
             sqlite3_finalize(stmt);
             set_json(res, {{"success", ok}, {"message", ok ? "服务已下架，历史预约保留" : "服务不存在或无权限"}}, ok ? 200 : 404);
+        } catch (const std::exception& e) { set_json(res, {{"success", false}, {"message", std::string("请求格式错误：") + e.what()}}, 400); }
+    });
+
+    svr.Post("/api/merchant/service/restore", [](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(db_mutex);
+        try {
+            auto d = json::parse(req.body);
+            int mid = d.value("MerchantID", 0), sid = d.value("ServiceID", 0);
+            sqlite3_stmt* stmt = nullptr;
+            const char* sql = "UPDATE t_service SET IsActive=1 WHERE ServiceID=? AND MerchantID=?;";
+            bool ok = false;
+            if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+                sqlite3_bind_int(stmt, 1, sid); sqlite3_bind_int(stmt, 2, mid); sqlite3_step(stmt); ok = sqlite3_changes(db) > 0;
+            }
+            sqlite3_finalize(stmt);
+            set_json(res, {{"success", ok}, {"message", ok ? "服务已恢复上架" : "服务不存在或无权限"}}, ok ? 200 : 404);
         } catch (const std::exception& e) { set_json(res, {{"success", false}, {"message", std::string("请求格式错误：") + e.what()}}, 400); }
     });
 

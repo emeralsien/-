@@ -1,7 +1,9 @@
 Online Appointment System - portable static build version
 
-1. On a computer that has MSYS2 UCRT64 gcc/g++ installed, double-click build.bat.
-2. It generates appointment_server.exe using static linking to reduce missing DLL errors.
+1. On a computer with Visual Studio Build Tools installed, open a Developer Command Prompt and run:
+   cl /EHsc /std:c++14 main.cpp sqlite3.c /link ws2_32.lib
+2. Or on a computer with MinGW/g++ installed, run:
+   g++ -std=c++11 main.cpp sqlite3.c -o appointment_server.exe -lws2_32
 3. After build success, keep these files in the same folder:
    - appointment_server.exe
    - index.html
