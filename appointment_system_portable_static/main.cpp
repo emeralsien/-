@@ -18,12 +18,6 @@
 
 using json = nlohmann::json;
 
-// Direct compile commands for Windows:
-// MSVC (Developer Command Prompt):
-//   cl /EHsc /std:c++14 main.cpp sqlite3.c /link ws2_32.lib
-// MinGW/g++:
-//   g++ -std=c++11 main.cpp sqlite3.c -o appointment_server.exe -lws2_32
-
 sqlite3* db = nullptr;
 std::mutex db_mutex;
 
@@ -56,6 +50,20 @@ bool is_valid_datetime(const std::string& v) {
     int hour = std::stoi(v.substr(11, 2));
     int minute = std::stoi(v.substr(14, 2));
     return month >= 1 && month <= 12 && day >= 1 && day <= 31 && hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59;
+}
+
+
+std::string add_minutes_to_datetime(const std::string& v, int minutes) {
+    std::tm tm = {};
+    std::istringstream ss(v);
+    ss >> std::get_time(&tm, "%Y-%m-%d %H:%M");
+    if (ss.fail()) return v;
+    tm.tm_isdst = -1;
+    std::time_t t = std::mktime(&tm) + minutes * 60;
+    std::tm* out = std::localtime(&t);
+    char buf[32];
+    std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M", out);
+    return std::string(buf);
 }
 
 int get_day_of_week(const std::string& appointment_time) {
@@ -204,6 +212,8 @@ json appointment_json_from_stmt(sqlite3_stmt* stmt) {
     item["MerchantID"] = sqlite3_column_int(stmt, 11);
     item["ShopName"] = safe_text(stmt, 12);
     item["HasReview"] = sqlite3_column_int(stmt, 13) > 0;
+    item["SlotID"] = sqlite3_column_int(stmt, 14);
+    item["SlotEnd"] = safe_text(stmt, 15);
     return item;
 }
 
@@ -225,6 +235,7 @@ void init_db() {
     exec_sql("CREATE TABLE IF NOT EXISTS t_appointment (AppointmentID INTEGER PRIMARY KEY AUTOINCREMENT, UserID INTEGER NOT NULL, ServiceID INTEGER NOT NULL, AppointmentTime TEXT NOT NULL, Status INTEGER DEFAULT 1, CreatedAt TEXT DEFAULT (datetime('now','localtime')));");
     exec_sql("CREATE TABLE IF NOT EXISTS t_review (ReviewID INTEGER PRIMARY KEY AUTOINCREMENT, AppointmentID INTEGER UNIQUE NOT NULL, Rating INTEGER NOT NULL, CommentContent TEXT, CreatedAt TEXT DEFAULT (datetime('now','localtime')));");
     exec_sql("CREATE TABLE IF NOT EXISTS t_schedule (ScheduleID INTEGER PRIMARY KEY AUTOINCREMENT, MerchantID INTEGER NOT NULL, DayOfWeek INTEGER NOT NULL, IsWorkingDay INTEGER DEFAULT 1, UNIQUE(MerchantID, DayOfWeek));");
+    exec_sql("CREATE TABLE IF NOT EXISTS t_slot (SlotID INTEGER PRIMARY KEY AUTOINCREMENT, ServiceID INTEGER NOT NULL, MerchantID INTEGER NOT NULL, SlotStart TEXT NOT NULL, SlotEnd TEXT NOT NULL, Capacity INTEGER NOT NULL DEFAULT 1, IsActive INTEGER DEFAULT 1, CreatedAt TEXT DEFAULT (datetime('now','localtime')), UNIQUE(ServiceID, SlotStart));");
     exec_sql("CREATE TABLE IF NOT EXISTS t_notification (NotificationID INTEGER PRIMARY KEY AUTOINCREMENT, ReceiverType TEXT DEFAULT 'merchant', ReceiverID INTEGER DEFAULT 1, AppointmentID INTEGER, Message TEXT NOT NULL, Status INTEGER DEFAULT 0, CreatedAt TEXT DEFAULT (datetime('now','localtime')));");
 
     add_column_if_missing("t_merchant", "MerchantPhone", "MerchantPhone TEXT");
@@ -234,6 +245,7 @@ void init_db() {
     add_column_if_missing("t_service", "IsActive", "IsActive INTEGER DEFAULT 1");
     add_column_if_missing("t_service", "CreatedAt", "CreatedAt TEXT DEFAULT ''");
     add_column_if_missing("t_appointment", "CreatedAt", "CreatedAt TEXT DEFAULT ''");
+    add_column_if_missing("t_appointment", "SlotID", "SlotID INTEGER DEFAULT 0");
     add_column_if_missing("t_review", "CreatedAt", "CreatedAt TEXT DEFAULT ''");
     add_column_if_missing("t_notification", "ReceiverType", "ReceiverType TEXT DEFAULT 'merchant'");
     add_column_if_missing("t_notification", "ReceiverID", "ReceiverID INTEGER DEFAULT 1");
@@ -242,6 +254,8 @@ void init_db() {
     exec_sql("CREATE INDEX IF NOT EXISTS idx_app_slot ON t_appointment(ServiceID, AppointmentTime, Status);");
     exec_sql("CREATE INDEX IF NOT EXISTS idx_app_user ON t_appointment(UserID, Status);");
     exec_sql("CREATE INDEX IF NOT EXISTS idx_service_merchant ON t_service(MerchantID, IsActive);");
+    exec_sql("CREATE INDEX IF NOT EXISTS idx_slot_service ON t_slot(ServiceID, SlotStart, IsActive);");
+    exec_sql("CREATE INDEX IF NOT EXISTS idx_app_slotid ON t_appointment(SlotID, Status);");
 
     int merchants = scalar_int("SELECT COUNT(*) FROM t_merchant;");
     if (merchants == 0) {
@@ -265,6 +279,11 @@ void init_db() {
         std::ostringstream os;
         os << "INSERT OR IGNORE INTO t_schedule (MerchantID, DayOfWeek, IsWorkingDay) VALUES (1," << d << "," << working << ");";
         exec_sql(os.str());
+    }
+    if (scalar_int("SELECT COUNT(*) FROM t_slot WHERE IsActive=1;") == 0) {
+        exec_sql("INSERT OR IGNORE INTO t_slot (ServiceID, MerchantID, SlotStart, SlotEnd, Capacity, IsActive) VALUES (1,1,'2026-07-09 15:00','2026-07-09 15:30',3,1);");
+        exec_sql("INSERT OR IGNORE INTO t_slot (ServiceID, MerchantID, SlotStart, SlotEnd, Capacity, IsActive) VALUES (1,1,'2026-07-10 10:00','2026-07-10 10:30',3,1);");
+        exec_sql("INSERT OR IGNORE INTO t_slot (ServiceID, MerchantID, SlotStart, SlotEnd, Capacity, IsActive) VALUES (2,1,'2026-07-10 14:00','2026-07-10 15:00',2,1);");
     }
 }
 
@@ -392,38 +411,24 @@ int main() {
         std::lock_guard<std::mutex> lock(db_mutex);
         std::string keyword = req.has_param("keyword") ? trim(req.get_param_value("keyword")) : "";
         std::string category = req.has_param("category") ? trim(req.get_param_value("category")) : "";
-        int merchant_id = req.has_param("MerchantID") ? std::stoi(req.get_param_value("MerchantID")) : 0;
         json arr = json::array();
-        std::string sql = "SELECT s.ServiceID,s.MerchantID,s.ServiceName,s.Category,s.Price,s.Duration,s.Capacity,s.IsActive,s.CreatedAt,m.ShopName,m.Address,"
+        std::string sql = "SELECT s.ServiceID,s.MerchantID,s.ServiceName,s.Category,s.Price,s.Duration,s.Capacity,m.ShopName,m.Address,"
                           "(SELECT COUNT(*) FROM t_review r JOIN t_appointment a ON r.AppointmentID=a.AppointmentID WHERE a.ServiceID=s.ServiceID) AS ReviewCount,"
                           "COALESCE((SELECT AVG(r.Rating) FROM t_review r JOIN t_appointment a ON r.AppointmentID=a.AppointmentID WHERE a.ServiceID=s.ServiceID),0) AS AvgRating "
-                          "FROM t_service s JOIN t_merchant m ON s.MerchantID=m.MerchantID WHERE 1=1";
+                          "FROM t_service s JOIN t_merchant m ON s.MerchantID=m.MerchantID WHERE s.IsActive=1";
         std::vector<std::string> params;
-        if (merchant_id > 0) {
-            sql += " AND s.MerchantID=?";
-            params.push_back(std::to_string(merchant_id));
-        }
         if (!keyword.empty()) { sql += " AND (s.ServiceName LIKE ? OR s.Category LIKE ? OR m.ShopName LIKE ?)"; params.push_back("%"+keyword+"%"); params.push_back("%"+keyword+"%"); params.push_back("%"+keyword+"%"); }
         if (!category.empty()) { sql += " AND s.Category LIKE ?"; params.push_back("%"+category+"%"); }
+        if (req.has_param("MerchantID")) { sql += " AND s.MerchantID=?"; params.push_back(req.get_param_value("MerchantID")); }
         sql += " ORDER BY s.ServiceID DESC;";
         sqlite3_stmt* stmt = nullptr;
         if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
             for (size_t i = 0; i < params.size(); ++i) sqlite3_bind_text(stmt, static_cast<int>(i+1), params[i].c_str(), -1, SQLITE_TRANSIENT);
             while (sqlite3_step(stmt) == SQLITE_ROW) {
                 json it;
-                it["ServiceID"] = sqlite3_column_int(stmt,0);
-                it["MerchantID"] = sqlite3_column_int(stmt,1);
-                it["ServiceName"] = safe_text(stmt,2);
-                it["Category"] = safe_text(stmt,3);
-                it["Price"] = sqlite3_column_int(stmt,4);
-                it["Duration"] = sqlite3_column_int(stmt,5);
-                it["Capacity"] = sqlite3_column_int(stmt,6);
-                it["IsActive"] = sqlite3_column_int(stmt,7) == 1;
-                it["CreatedAt"] = safe_text(stmt,8);
-                it["ShopName"] = safe_text(stmt,9);
-                it["Address"] = safe_text(stmt,10);
-                it["ReviewCount"] = sqlite3_column_int(stmt,11);
-                it["AvgRating"] = sqlite3_column_double(stmt,12);
+                it["ServiceID"] = sqlite3_column_int(stmt,0); it["MerchantID"] = sqlite3_column_int(stmt,1); it["ServiceName"] = safe_text(stmt,2); it["Category"] = safe_text(stmt,3);
+                it["Price"] = sqlite3_column_int(stmt,4); it["Duration"] = sqlite3_column_int(stmt,5); it["Capacity"] = sqlite3_column_int(stmt,6); it["ShopName"] = safe_text(stmt,7); it["Address"] = safe_text(stmt,8);
+                it["ReviewCount"] = sqlite3_column_int(stmt,9); it["AvgRating"] = sqlite3_column_double(stmt,10);
                 arr.push_back(it);
             }
         }
@@ -466,23 +471,12 @@ int main() {
                 sqlite3_bind_int(stmt, 1, sid); sqlite3_bind_int(stmt, 2, mid); sqlite3_step(stmt); ok = sqlite3_changes(db) > 0;
             }
             sqlite3_finalize(stmt);
-            set_json(res, {{"success", ok}, {"message", ok ? "服务已下架，历史预约保留" : "服务不存在或无权限"}}, ok ? 200 : 404);
-        } catch (const std::exception& e) { set_json(res, {{"success", false}, {"message", std::string("请求格式错误：") + e.what()}}, 400); }
-    });
-
-    svr.Post("/api/merchant/service/restore", [](const httplib::Request& req, httplib::Response& res) {
-        std::lock_guard<std::mutex> lock(db_mutex);
-        try {
-            auto d = json::parse(req.body);
-            int mid = d.value("MerchantID", 0), sid = d.value("ServiceID", 0);
-            sqlite3_stmt* stmt = nullptr;
-            const char* sql = "UPDATE t_service SET IsActive=1 WHERE ServiceID=? AND MerchantID=?;";
-            bool ok = false;
-            if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
-                sqlite3_bind_int(stmt, 1, sid); sqlite3_bind_int(stmt, 2, mid); sqlite3_step(stmt); ok = sqlite3_changes(db) > 0;
+            if (ok) {
+                sqlite3_stmt* ss = nullptr;
+                if (sqlite3_prepare_v2(db, "UPDATE t_slot SET IsActive=0 WHERE ServiceID=? AND MerchantID=?;", -1, &ss, nullptr) == SQLITE_OK) { sqlite3_bind_int(ss,1,sid); sqlite3_bind_int(ss,2,mid); sqlite3_step(ss); }
+                sqlite3_finalize(ss);
             }
-            sqlite3_finalize(stmt);
-            set_json(res, {{"success", ok}, {"message", ok ? "服务已恢复上架" : "服务不存在或无权限"}}, ok ? 200 : 404);
+            set_json(res, {{"success", ok}, {"message", ok ? "服务已下架，对应可预约时间段已关闭，历史预约保留" : "服务不存在或无权限"}}, ok ? 200 : 404);
         } catch (const std::exception& e) { set_json(res, {{"success", false}, {"message", std::string("请求格式错误：") + e.what()}}, 400); }
     });
 
@@ -515,27 +509,98 @@ int main() {
         } catch (const std::exception& e) { exec_sql("ROLLBACK;"); set_json(res, {{"success", false}, {"message", std::string("请求格式错误：") + e.what()}}, 400); }
     });
 
+
+    svr.Get("/api/slots", [](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(db_mutex);
+        std::string sql = "SELECT sl.SlotID, sl.ServiceID, sl.MerchantID, sl.SlotStart, sl.SlotEnd, sl.Capacity, sl.IsActive, "
+                          "s.ServiceName, s.Category, s.Price, s.Duration, m.ShopName, "
+                          "(SELECT COUNT(*) FROM t_appointment a WHERE a.SlotID=sl.SlotID AND a.Status IN (1,2)) AS Booked "
+                          "FROM t_slot sl JOIN t_service s ON sl.ServiceID=s.ServiceID JOIN t_merchant m ON sl.MerchantID=m.MerchantID "
+                          "WHERE sl.IsActive=1 AND s.IsActive=1";
+        std::vector<std::string> params;
+        if (req.has_param("ServiceID")) { sql += " AND sl.ServiceID=?"; params.push_back(req.get_param_value("ServiceID")); }
+        if (req.has_param("MerchantID")) { sql += " AND sl.MerchantID=?"; params.push_back(req.get_param_value("MerchantID")); }
+        sql += " ORDER BY sl.SlotStart ASC;";
+        json arr = json::array(); sqlite3_stmt* st = nullptr;
+        if (sqlite3_prepare_v2(db, sql.c_str(), -1, &st, nullptr) == SQLITE_OK) {
+            for (size_t i=0;i<params.size();++i) sqlite3_bind_text(st,(int)i+1,params[i].c_str(),-1,SQLITE_TRANSIENT);
+            while (sqlite3_step(st)==SQLITE_ROW) {
+                int cap = sqlite3_column_int(st,5), booked = sqlite3_column_int(st,12);
+                arr.push_back({{"SlotID",sqlite3_column_int(st,0)}, {"ServiceID",sqlite3_column_int(st,1)}, {"MerchantID",sqlite3_column_int(st,2)},
+                               {"SlotStart",safe_text(st,3)}, {"SlotEnd",safe_text(st,4)}, {"Capacity",cap}, {"IsActive",sqlite3_column_int(st,6)},
+                               {"ServiceName",safe_text(st,7)}, {"Category",safe_text(st,8)}, {"Price",sqlite3_column_int(st,9)}, {"Duration",sqlite3_column_int(st,10)},
+                               {"ShopName",safe_text(st,11)}, {"Booked",booked}, {"Remaining",std::max(0, cap-booked)}});
+            }
+        }
+        sqlite3_finalize(st); set_json(res, arr);
+    });
+
+    svr.Post("/api/merchant/slots", [](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(db_mutex);
+        try {
+            auto d = json::parse(req.body);
+            int mid = d.value("MerchantID",0), sid = d.value("ServiceID",0), cap = d.value("Capacity",0);
+            std::string start = trim(d.value("SlotStart", ""));
+            if (mid<=0 || sid<=0 || !is_valid_datetime(start)) return set_json(res, {{"success",false},{"message","请先选择服务，并填写正确开始时间"}}, 400);
+            sqlite3_stmt* q=nullptr; int duration=0, serviceCap=1, realMid=0;
+            if (sqlite3_prepare_v2(db, "SELECT MerchantID, Duration, Capacity FROM t_service WHERE ServiceID=? AND IsActive=1;", -1, &q, nullptr)==SQLITE_OK) {
+                sqlite3_bind_int(q,1,sid);
+                if (sqlite3_step(q)==SQLITE_ROW) { realMid=sqlite3_column_int(q,0); duration=sqlite3_column_int(q,1); serviceCap=sqlite3_column_int(q,2); }
+            }
+            sqlite3_finalize(q);
+            if (realMid==0) return set_json(res, {{"success",false},{"message","服务不存在或已下架"}}, 400);
+            if (realMid!=mid) return set_json(res, {{"success",false},{"message","只能为自己的服务开放时间段"}}, 403);
+            if (!is_working_day(mid, start)) return set_json(res, {{"success",false},{"message","该日期属于商家休息日，请先调整排班或选择工作日"}}, 400);
+            if (cap<=0) cap = serviceCap>0 ? serviceCap : 1;
+            std::string end = add_minutes_to_datetime(start, duration>0 ? duration : 30);
+            sqlite3_stmt* st=nullptr; bool ok=false;
+            const char* sql="INSERT INTO t_slot (ServiceID,MerchantID,SlotStart,SlotEnd,Capacity,IsActive,CreatedAt) VALUES (?,?,?,?,?,1,datetime('now','localtime'));";
+            if (sqlite3_prepare_v2(db, sql, -1, &st, nullptr)==SQLITE_OK) {
+                sqlite3_bind_int(st,1,sid); sqlite3_bind_int(st,2,mid); sqlite3_bind_text(st,3,start.c_str(),-1,SQLITE_TRANSIENT); sqlite3_bind_text(st,4,end.c_str(),-1,SQLITE_TRANSIENT); sqlite3_bind_int(st,5,cap);
+                ok = sqlite3_step(st)==SQLITE_DONE;
+            }
+            sqlite3_finalize(st);
+            set_json(res, {{"success",ok},{"message",ok?"可预约时间段已开放":"该服务在此开始时间已存在时间段"}}, ok?200:400);
+        } catch(const std::exception& e){ set_json(res, {{"success",false},{"message",std::string("请求格式错误：")+e.what()}},400); }
+    });
+
+    svr.Post("/api/merchant/slots/delete", [](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(db_mutex);
+        try {
+            auto d=json::parse(req.body); int mid=d.value("MerchantID",0), slot=d.value("SlotID",0);
+            if (scalar_int("SELECT COUNT(*) FROM t_appointment WHERE SlotID=? AND Status IN (1,2);", {std::to_string(slot)})>0)
+                return set_json(res, {{"success",false},{"message","该时间段已有待处理预约，不能直接关闭"}}, 400);
+            sqlite3_stmt* st=nullptr; bool ok=false;
+            if(sqlite3_prepare_v2(db,"UPDATE t_slot SET IsActive=0 WHERE SlotID=? AND MerchantID=?;",-1,&st,nullptr)==SQLITE_OK){sqlite3_bind_int(st,1,slot);sqlite3_bind_int(st,2,mid);sqlite3_step(st);ok=sqlite3_changes(db)>0;} sqlite3_finalize(st);
+            set_json(res, {{"success",ok},{"message",ok?"时间段已关闭":"时间段不存在或无权限"}}, ok?200:404);
+        } catch(const std::exception& e){ set_json(res, {{"success",false},{"message",std::string("请求格式错误：")+e.what()}},400); }
+    });
+
     svr.Post("/api/appointments", [](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lock(db_mutex);
         try {
             auto d = json::parse(req.body);
-            int uid = d.value("UserID", 0), sid = d.value("ServiceID", 0);
-            std::string at = trim(d.value("AppointmentTime", ""));
-            if (uid <= 0 || sid <= 0 || !is_valid_datetime(at)) return set_json(res, {{"success", false}, {"message", "预约参数不合法，请选择有效时间"}}, 400);
+            int uid = d.value("UserID", 0);
+            int slotId = d.value("SlotID", 0);
+            if (uid <= 0 || slotId <= 0) return set_json(res, {{"success", false}, {"message", "预约参数不合法，请从商家开放的时间段中选择"}}, 400);
             if (scalar_int("SELECT COUNT(*) FROM t_user WHERE UserID=?;", {std::to_string(uid)}) == 0) return set_json(res, {{"success", false}, {"message", "用户不存在，请重新登录"}}, 400);
-            int mid = get_service_merchant_id(sid);
-            if (mid == 0) return set_json(res, {{"success", false}, {"message", "服务不存在或已下架"}}, 400);
-            if (!is_working_day(mid, at)) return set_json(res, {{"success", false}, {"message", "该日期为商家休息日，请重新选择"}}, 400);
+
+            sqlite3_stmt* q=nullptr; int sid=0, mid=0, capacity=0; std::string at;
+            const char* qsql="SELECT sl.ServiceID, sl.MerchantID, sl.SlotStart, sl.Capacity FROM t_slot sl JOIN t_service s ON sl.ServiceID=s.ServiceID WHERE sl.SlotID=? AND sl.IsActive=1 AND s.IsActive=1;";
+            if(sqlite3_prepare_v2(db,qsql,-1,&q,nullptr)==SQLITE_OK){ sqlite3_bind_int(q,1,slotId); if(sqlite3_step(q)==SQLITE_ROW){ sid=sqlite3_column_int(q,0); mid=sqlite3_column_int(q,1); at=safe_text(q,2); capacity=sqlite3_column_int(q,3); }}
+            sqlite3_finalize(q);
+            if (sid==0 || mid==0 || at.empty()) return set_json(res, {{"success", false}, {"message", "该时间段不存在、已关闭或服务已下架"}}, 400);
+            if (!is_working_day(mid, at)) return set_json(res, {{"success", false}, {"message", "该日期为商家休息日，请选择其他时间段"}}, 400);
             if (scalar_int("SELECT COUNT(*) FROM t_appointment WHERE UserID=? AND AppointmentTime=? AND Status IN (1,2);", {std::to_string(uid), at}) > 0) return set_json(res, {{"success", false}, {"message", "你在该时段已有未完成预约，不能重复预约"}}, 400);
-            int capacity = get_service_capacity(sid);
-            int occupied = scalar_int("SELECT COUNT(*) FROM t_appointment WHERE ServiceID=? AND AppointmentTime=? AND Status IN (1,2);", {std::to_string(sid), at});
-            if (occupied >= capacity) return set_json(res, {{"success", false}, {"message", "该时段名额已满，请选择其他时间"}}, 400);
+            int occupied = scalar_int("SELECT COUNT(*) FROM t_appointment WHERE SlotID=? AND Status IN (1,2);", {std::to_string(slotId)});
+            if (occupied >= capacity) return set_json(res, {{"success", false}, {"message", "该时间段名额已满，请选择其他时间段"}}, 400);
+
             exec_sql("BEGIN IMMEDIATE TRANSACTION;");
-            occupied = scalar_int("SELECT COUNT(*) FROM t_appointment WHERE ServiceID=? AND AppointmentTime=? AND Status IN (1,2);", {std::to_string(sid), at});
-            if (occupied >= capacity) { exec_sql("ROLLBACK;"); return set_json(res, {{"success", false}, {"message", "该时段刚被约满，请刷新后重试"}}, 409); }
+            occupied = scalar_int("SELECT COUNT(*) FROM t_appointment WHERE SlotID=? AND Status IN (1,2);", {std::to_string(slotId)});
+            if (occupied >= capacity) { exec_sql("ROLLBACK;"); return set_json(res, {{"success", false}, {"message", "该时间段刚被约满，请刷新后重试"}}, 409); }
             sqlite3_stmt* stmt = nullptr; bool ok = false;
-            if (sqlite3_prepare_v2(db, "INSERT INTO t_appointment (UserID,ServiceID,AppointmentTime,Status,CreatedAt) VALUES (?,?,?,1,datetime('now','localtime'));", -1, &stmt, nullptr)==SQLITE_OK) {
-                sqlite3_bind_int(stmt,1,uid); sqlite3_bind_int(stmt,2,sid); sqlite3_bind_text(stmt,3,at.c_str(),-1,SQLITE_TRANSIENT); ok = sqlite3_step(stmt)==SQLITE_DONE;
+            if (sqlite3_prepare_v2(db, "INSERT INTO t_appointment (UserID,ServiceID,SlotID,AppointmentTime,Status,CreatedAt) VALUES (?,?,?,?,1,datetime('now','localtime'));", -1, &stmt, nullptr)==SQLITE_OK) {
+                sqlite3_bind_int(stmt,1,uid); sqlite3_bind_int(stmt,2,sid); sqlite3_bind_int(stmt,3,slotId); sqlite3_bind_text(stmt,4,at.c_str(),-1,SQLITE_TRANSIENT); ok = sqlite3_step(stmt)==SQLITE_DONE;
             }
             sqlite3_finalize(stmt);
             int aid = static_cast<int>(sqlite3_last_insert_rowid(db));
@@ -547,8 +612,8 @@ int main() {
     svr.Get("/api/appointments", [](const httplib::Request& req, httplib::Response& res) {
         std::lock_guard<std::mutex> lock(db_mutex);
         std::string sql = "SELECT a.AppointmentID,a.UserID,a.ServiceID,a.AppointmentTime,a.Status,u.Username,u.PhoneNumber,s.ServiceName,s.Category,s.Price,s.Duration,s.MerchantID,m.ShopName,"
-                          "(SELECT COUNT(*) FROM t_review r WHERE r.AppointmentID=a.AppointmentID) AS HasReview "
-                          "FROM t_appointment a JOIN t_user u ON a.UserID=u.UserID JOIN t_service s ON a.ServiceID=s.ServiceID JOIN t_merchant m ON s.MerchantID=m.MerchantID WHERE 1=1";
+                          "(SELECT COUNT(*) FROM t_review r WHERE r.AppointmentID=a.AppointmentID) AS HasReview, COALESCE(a.SlotID,0), COALESCE(sl.SlotEnd,'') "
+                          "FROM t_appointment a JOIN t_user u ON a.UserID=u.UserID JOIN t_service s ON a.ServiceID=s.ServiceID JOIN t_merchant m ON s.MerchantID=m.MerchantID LEFT JOIN t_slot sl ON a.SlotID=sl.SlotID WHERE 1=1";
         std::vector<std::string> params;
         if (req.has_param("UserID")) { sql += " AND a.UserID=?"; params.push_back(req.get_param_value("UserID")); }
         if (req.has_param("MerchantID")) { sql += " AND s.MerchantID=?"; params.push_back(req.get_param_value("MerchantID")); }

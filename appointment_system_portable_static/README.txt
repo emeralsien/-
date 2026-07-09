@@ -1,14 +1,21 @@
-Online Appointment System - portable static build version
+Online Appointment System - Improved UI/Business Version
 
-1. On a computer with Visual Studio Build Tools installed, open a Developer Command Prompt and run:
-   cl /EHsc /std:c++14 main.cpp sqlite3.c /link ws2_32.lib
-2. Or on a computer with MinGW/g++ installed, run:
-   g++ -std=c++11 main.cpp sqlite3.c -o appointment_server.exe -lws2_32
-3. After build success, keep these files in the same folder:
-   - appointment_server.exe
-   - index.html
-4. On another Windows computer, double-click appointment_server.exe.
-5. Browser will open http://127.0.0.1:8080 automatically.
+How to use on Windows:
+1. If appointment_server.exe already exists, double-click it.
+2. If exe does not exist, double-click build.bat first. It will generate appointment_server.exe.
+3. Keep the black console window open. The browser will open http://127.0.0.1:8080 automatically.
+4. Send the whole folder to classmates. This build script uses static linking to reduce missing-DLL problems.
 
-If Windows blocks the exe, click More info -> Run anyway.
-Do not close the black console window while using the website.
+Default test accounts:
+User:     13311112222 / 123456
+Merchant: 13800001111 / 123456
+
+Main improvements in this version:
+- One unified login/register page for both user and merchant roles.
+- User dashboard and merchant dashboard are strictly separated after login.
+- User side only shows user actions: book, cancel own appointment, review completed service.
+- Merchant side only shows merchant actions: publish services, open appointment slots, confirm/cancel/complete orders.
+- Appointment time is now created by merchants as available slots. Users can only select merchant-opened slots.
+- Desktop UI redesigned with sidebar, cards, panels and responsive layout.
+- Mobile UI uses page-style navigation instead of one very long page.
+- Added t_slot table and slot APIs for merchant-controlled appointment time management.
